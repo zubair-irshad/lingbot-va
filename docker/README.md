@@ -4,138 +4,151 @@ Runs the single-scene (or multi-scene) DROID post-training with **forward-invers
 dynamics consistency** (`droid_train` config) inside a container, with wandb logging.
 On the DGX, GPUs are dedicated so FSDP CPU-offload is turned **off** for full speed.
 
-There are two ways to build/run: **plain `docker` scripts** (recommended — no
-docker-compose needed, works on the DGX) or **docker compose** (if you have the v2
-plugin). The scripts are the simplest path.
+The recommended flow is: **build the image → open an interactive shell in the
+container → `wandb login` → build the dataset → launch training yourself** (so you can
+watch it live). No `docker-compose` is required.
 
-## 1. Build
+---
+
+## Step 0 — one-time: build the image (on the DGX)
 
 ```bash
-# from the repo root
-bash docker/build.sh                 # ~cuda12.6 base + torch cu126 + flash-attn compile
-MAX_JOBS=16 bash docker/build.sh     # faster flash-attn compile on a big-RAM DGX
+cd ~/lingbot-va
+git pull                                   # make sure you have the latest scripts
+
+MAX_JOBS=16 bash docker/build.sh           # cuda12.6 + torch cu126 + flash-attn compile
+                                           # (~10-15 min; MAX_JOBS speeds the flash-attn build)
 ```
 
-(compose alternative: `cd docker && docker compose build`)
+`run.sh`/`shell.sh` **mount the live repo code** into the container (`MOUNT_CODE=1`, the
+default), so after this initial build a plain `git pull` on the host is enough to pick up
+code changes — **no rebuild needed** unless dependencies change. Set `MOUNT_CODE=0` to use
+the code baked into the image instead.
 
-## 2. Configure
+## Step 1 — download the base checkpoint (~23 GB), once
 
-```bash
-cp docker/.env.example docker/.env
-# edit docker/.env: WANDB_API_KEY / WANDB_TEAM_NAME / WANDB_PROJECT, and the host paths:
-#   DATASET_DIR  -> your data/droid_lerobot (built by build_droid_lerobot.py)
-#   CKPT_DIR     -> dir containing lingbot-va-base/
-#   OUTPUT_DIR   -> where checkpoints/logs are written
-# (defaults resolve to <repo>/data/droid_lerobot, <repo>/checkpoints, <repo>/outputs)
-```
-
-### 2a. Download the base checkpoint (~23 GB) on the DGX
-
-Put it in `<repo>/checkpoints/lingbot-va-base` (the default the configs look for; or set
-`CKPT_DIR` in `.env` to wherever you download it):
+Put it where the config looks (`<repo>/checkpoints/lingbot-va-base`), or anywhere and set
+`CKPT_DIR`:
 
 ```bash
-pip install "huggingface_hub[cli]"    # if not already available
+pip install "huggingface_hub[cli]"         # host or container, either is fine
 hf download robbyant/lingbot-va-base --local-dir checkpoints/lingbot-va-base
-# (older CLI: huggingface-cli download robbyant/lingbot-va-base --local-dir checkpoints/lingbot-va-base)
 ```
 
-### 2b. Get the DROID episodes + build the dataset
+## Step 2 — point at your scratch space + open a shell in the container
 
-The raw DROID 1.0.1 episodes must be present under `<repo>/1.0.1/…`. Then build the
-single-scene LeRobot latent dataset into `<repo>/data/droid_lerobot` (the default
-`DATASET_DIR`):
-
-```bash
-python droid_helpers/build_droid_lerobot.py \
-  --scene "1.0.1/<lab>/success/<date>/<time>" \
-  --out data/droid_lerobot --model checkpoints/lingbot-va-base \
-  --fps 12 --height 256 --width 256
-```
-
-Run 2a/2b inside the container via `CMD=bash bash docker/run.sh`. Key points on a
-shared DGX:
-
-- **Write datasets/outputs to your scratch space**, e.g. `/datasets/zubair`, via
-  `DATASET_DIR` / `OUTPUT_DIR`. `run.sh` mounts those at their **own absolute path**
-  inside the container, so the `--out` you pass resolves verbatim, and also sets
-  `LINGBOT_DATASET` so the trainer reads from there automatically.
-- The builder **never deletes** anything — if the target `lerobot/` subdir exists it
-  errors; pass a fresh `--out` or remove it yourself.
-- The raw DROID episodes are mounted read-only from `DROID_DIR` (default `<repo>/1.0.1`).
-- `run.sh` **mounts the live repo code** over the image copy (default `MOUNT_CODE=1`),
-  so a host `git pull` takes effect with no rebuild. Set `MOUNT_CODE=0` to use the
-  code baked into the image.
-
-Example on the DGX:
+On the shared DGX, write datasets/outputs to your scratch (e.g. `/datasets/zubair`).
+`shell.sh` creates those dirs, mounts them at their own absolute path inside the
+container, attaches all GPUs, and passes wandb env through.
 
 ```bash
 export DATASET_DIR=/datasets/zubair/droid_lerobot
 export OUTPUT_DIR=/datasets/zubair/outputs
-CMD=bash bash docker/run.sh          # shell in container (code + scratch mounted)
-# inside:
+bash docker/shell.sh                       # <-- drops you into a shell in the container
+```
+
+You are now `root@<container>:/workspace/lingbot-va#`.
+
+## Step 3 — inside the container: wandb login
+
+```bash
+wandb login                                # paste your API key when prompted
+# (or non-interactively: export WANDB_API_KEY=... before docker/shell.sh)
+```
+
+## Step 4 — inside the container: build the dataset
+
+The raw DROID episodes are mounted read-only at `./1.0.1`. Build the LeRobot latent
+dataset into your scratch `--out` (a `lerobot/` subdir is created under it):
+
+```bash
 python droid_helpers/build_droid_lerobot.py \
   --scene "1.0.1/AUTOLab/success/2023-07-14/Fri_Jul_14_16:20:36_2023" \
-  --out /datasets/zubair/droid_lerobot --model checkpoints/lingbot-va-base \
+  --out /datasets/zubair/droid_lerobot \
+  --model checkpoints/lingbot-va-base \
   --fps 12 --height 256 --width 256
-exit
-# then train (same DATASET_DIR/OUTPUT_DIR env):
-bash docker/run.sh
 ```
 
-## 3. Train (8 GPUs, FSDP, no offload, wandb on)
+Notes:
+- The builder **never deletes** anything. If `.../droid_lerobot/lerobot` already exists it
+  errors — pass a fresh `--out` (e.g. `droid_lerobot_v2`) or remove that subdir yourself.
+- fps=12 (source 60 fps) → 20 actions per latent frame, matching the model's action stream.
+
+## Step 5 — inside the container: launch training (8 GPUs, watch it live)
 
 ```bash
-bash docker/run.sh                          # default: 8-GPU FSDP, no offload, wandb on
+NGPU=8 bash script/run_droid_posttrain.sh fsdp_cpu_offload=false enable_wandb=true
 ```
 
-Override any config key as trailing `key=value` args, e.g. a longer run with a
-custom loss balance:
+- `fsdp_cpu_offload=false` → full-speed GPU-resident training (the dev-box A6000 path used
+  `true`; the DGX has the memory to keep everything on-GPU).
+- `enable_wandb=true` → logs to the project/team from your env (`WANDB_PROJECT`,
+  `WANDB_TEAM_NAME`); set `WANDB_RUN_NAME` to name the run.
+- The trainer reads the dataset from `LINGBOT_DATASET` (set automatically to `DATASET_DIR`
+  by `shell.sh`/`run.sh`), so it finds `/datasets/zubair/droid_lerobot` with no extra flags.
+
+Override any config key as trailing `key=value` args, e.g. a longer run:
 
 ```bash
-bash docker/run.sh num_steps=5000 forward_dynamics_weight=1.0 \
-     inverse_dynamics_weight=1.0 batch_size=1 gradient_accumulation_steps=4
+NGPU=8 bash script/run_droid_posttrain.sh fsdp_cpu_offload=false enable_wandb=true \
+  num_steps=5000 forward_dynamics_weight=1.0 inverse_dynamics_weight=1.0 \
+  batch_size=1 gradient_accumulation_steps=4
 ```
-
-Drop into an interactive shell in the container (to build the dataset, debug, etc.):
-
-```bash
-CMD=bash bash docker/run.sh
-```
-
-Pick specific GPUs / fewer GPUs:
-
-```bash
-GPUS='"device=0,1,2,3"' NGPU=4 bash docker/run.sh
-```
-
-(compose alternative: `cd docker && docker compose run --rm posttrain`)
 
 Checkpoints land in `${OUTPUT_DIR}/droid_train/checkpoints/checkpoint_step_*/transformer/`
 (diffusers format — load the same way as the base model).
 
+---
+
+## One-shot alternative (non-interactive)
+
+If you'd rather not use the shell and already ran `wandb login` (or set `WANDB_API_KEY`),
+`run.sh` builds nothing but launches training directly:
+
+```bash
+export DATASET_DIR=/datasets/zubair/droid_lerobot OUTPUT_DIR=/datasets/zubair/outputs
+bash docker/run.sh                                   # 8-GPU, no offload, wandb on
+bash docker/run.sh num_steps=5000                    # with overrides
+GPUS='"device=0,1,2,3"' NGPU=4 bash docker/run.sh    # fewer GPUs
+```
+
+`docker compose` alternative (only if the v2 plugin is installed):
+`cd docker && docker compose build && docker compose run --rm posttrain`.
+
+---
+
+## Environment / knobs
+
+Set via `export`, or persist in `docker/.env` (auto-loaded by `run.sh`/`shell.sh`;
+copy `docker/.env.example`):
+
+| Var | Default | Meaning |
+|---|---|---|
+| `DATASET_DIR` | `<repo>/data/droid_lerobot` | LeRobot latent dataset (your scratch on the DGX) |
+| `OUTPUT_DIR` | `<repo>/outputs` | checkpoints + logs |
+| `CKPT_DIR` | `<repo>/checkpoints` | dir containing `lingbot-va-base/` |
+| `DROID_DIR` | `<repo>/1.0.1` | raw DROID episodes (mounted read-only) |
+| `NGPU` | `8` | GPUs for FSDP |
+| `GPUS` | `all` | which GPUs (`'"device=0,1"'` for a subset) |
+| `MOUNT_CODE` | `1` | mount live repo code (host `git pull` applies, no rebuild) |
+| `WANDB_API_KEY` / `WANDB_TEAM_NAME` / `WANDB_PROJECT` / `WANDB_RUN_NAME` | — | wandb config |
+| `MAX_JOBS` | `4` | flash-attn compile parallelism (build-time; raise on DGX) |
+
 ## GPU prerequisites
+
 The container needs the **NVIDIA Container Toolkit** on the host (standard on any DGX):
+
 ```bash
 nvidia-ctk --version           # should exist on the DGX
 ```
-The compose file reserves all GPUs via the `deploy.resources` block (the modern CDI path,
-equivalent to `docker run --gpus all`). If your DGX uses the legacy runtime instead, run:
-```bash
-docker run --rm --runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=all \
-  -v $PWD/../data/droid_lerobot:/workspace/lingbot-va/data/droid_lerobot \
-  -v $PWD/../checkpoints:/workspace/lingbot-va/checkpoints \
-  -v $PWD/../outputs:/workspace/lingbot-va/outputs \
-  -e WANDB_API_KEY=... -e WANDB_TEAM_NAME=... -e WANDB_PROJECT=lingbot-va-droid \
-  lingbot-va-droid:latest \
-  bash script/run_droid_posttrain.sh fsdp_cpu_offload=false enable_wandb=true
-```
-(The image itself is verified: torch cu126 + flash-attn 2.8.3 + lerobot all import correctly.)
+
+`run.sh`/`shell.sh` use `--gpus`. If your DGX only has the legacy runtime, prepend
+`--runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=all` to a manual `docker run` (see git history
+for the full form). The image itself is verified: torch cu126 + flash-attn 2.8.3 + lerobot
+all import correctly.
 
 ## Notes
-- `shm_size: 64gb` + `ipc: host` are set for dataloader workers and FSDP collectives.
-- `MAX_JOBS=4` bounds the flash-attn compile (~15-20 min); raise it on the DGX to build faster.
-- The image compiles flash-attn against the CUDA 12.6 base (matches torch cu126), so
-  the `attn_mode="flex"` training path and `"flashattn"` inference both work.
-- Set `WANDB_RUN_NAME` in `.env` to name the run (defaults to the config name).
-- For a memory-constrained node, override `fsdp_cpu_offload=true` (as used on the dev A6000s).
+- `shm-size=64g` + `--ipc=host` are set for dataloader workers and FSDP collectives.
+- flash-attn is compiled against the CUDA 12.6 base (matches torch cu126), so both the
+  `attn_mode="flex"` training path and `"flashattn"` inference work.
+- Memory-constrained node? Override `fsdp_cpu_offload=true` (as used on the dev A6000s).
