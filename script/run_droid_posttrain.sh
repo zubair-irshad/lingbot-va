@@ -11,7 +11,7 @@
 #   DATASET=/datasets/zubair/droid_lerobot NGPU=8 bash script/run_droid_posttrain.sh
 # Any extra key=value pairs become --key value config overrides forwarded to train.py.
 set -x
-umask 007
+umask 022   # world-readable outputs (checkpoints accessible outside the container)
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"

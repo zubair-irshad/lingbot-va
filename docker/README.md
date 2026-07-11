@@ -151,6 +151,21 @@ nvidia-ctk --version           # should exist on the DGX
 for the full form). The image itself is verified: torch cu126 + flash-attn 2.8.3 + lerobot
 all import correctly.
 
+## File ownership / permissions
+`run.sh`/`shell.sh` run the container as **your host user** (`--user $(id -u):$(id -g)`),
+so checkpoints/datasets written to bind-mounts are owned by you and accessible outside the
+container. Set `RUN_AS_ROOT=1` if you need root inside (e.g. `apt`/`pip install`).
+
+If an earlier run (as root) left root-owned files you can't access, fix them once with:
+```bash
+sudo chown -R "$(id -u):$(id -g)" ~/lingbot-va/outputs /datasets/zubair
+```
+
+## Do I need to rebuild after a `git pull`?
+No. The repo is mounted live (`MOUNT_CODE=1`), so code changes on the host apply to the
+running/next container immediately — no rebuild, no need to exit. Rebuild only when
+dependencies change (edits to `requirements-docker.txt` / `Dockerfile`).
+
 ## Notes
 - `shm-size=64g` + `--ipc=host` are set for dataloader workers and FSDP collectives.
 - flash-attn is compiled against the CUDA 12.6 base (matches torch cu126), so both the

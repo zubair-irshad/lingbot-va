@@ -73,10 +73,19 @@ MOUNTS+=(-v "${DATASET_DIR}:/workspace/lingbot-va/data/droid_lerobot")
 DEFAULT_CMD="bash script/run_droid_posttrain.sh fsdp_cpu_offload=false enable_wandb=true $*"
 CMD="${CMD:-${DEFAULT_CMD}}"
 
+# Run as the host user so files written to bind-mounts (checkpoints, datasets) are
+# owned by YOU, not root — so they're accessible outside the container. Set
+# RUN_AS_ROOT=1 to run as root instead (e.g. if you need apt/pip install inside).
+USER_ARGS=()
+if [ "${RUN_AS_ROOT:-0}" != "1" ]; then
+    USER_ARGS=(--user "$(id -u):$(id -g)" -e HOME=/tmp -e XDG_CACHE_HOME=/tmp/.cache)
+fi
+
 exec docker run --rm -it \
     --gpus "${GPUS}" \
     --shm-size=64g --ipc=host \
     --ulimit memlock=-1 --ulimit stack=67108864 \
+    "${USER_ARGS[@]}" \
     -e NGPU="${NGPU}" \
     -e CONFIG_NAME="${CONFIG_NAME}" \
     -e WANDB_API_KEY="${WANDB_API_KEY:-}" \
