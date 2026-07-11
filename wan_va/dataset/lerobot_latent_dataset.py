@@ -187,6 +187,10 @@ class LatentLeRobotDataset(LeRobotDataset):
                 cur_path / f"episode_{episode_index:06d}_{start_frame}_{end_frame}.pth"
             )
             if not os.path.exists(latent_file):
+                # Episode is silently dropped when a cam's latent is missing — this is
+                # the usual cause of an empty dataset, so surface exactly what's missing.
+                print(f"[LatentLeRobotDataset] DROP ep{episode_index} "
+                      f"[{start_frame},{end_frame}] — missing latent: {latent_file}")
                 return False
         return True
 

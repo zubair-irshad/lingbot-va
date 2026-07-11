@@ -147,8 +147,28 @@ class Trainer:
             lr_lambda=lambda step: warmup_constant_lambda(step, warmup_steps=config.warmup_steps))
 
         # Setup dataloaders
-        logger.info("Setting up datasets...")
+        logger.info(f"Setting up datasets from dataset_path={config.dataset_path} ...")
         train_dataset = MultiLatentLeRobotDataset(config=config)
+        n_samples = len(train_dataset)
+        if config.rank == 0:
+            logger.info(f"Dataset has {n_samples} samples "
+                        f"(cams={config.obs_cam_keys})")
+        if n_samples == 0:
+            # Fail fast with a clear cause instead of a cryptic StopIteration on step 0.
+            import glob as _glob
+            infos = _glob.glob(os.path.join(config.dataset_path, "**", "meta", "info.json"),
+                               recursive=True)
+            latents = _glob.glob(os.path.join(config.dataset_path, "**", "latents", "**", "*.pth"),
+                                 recursive=True)
+            raise RuntimeError(
+                f"Empty dataset at {config.dataset_path}. "
+                f"Found {len(infos)} meta/info.json and {len(latents)} latent .pth files. "
+                f"Likely causes: (1) dataset_path/LINGBOT_DATASET points at the wrong dir; "
+                f"(2) latents were not extracted (need latents/chunk-XXX/<cam_key>/"
+                f"episode_*_<start>_<end>.pth for EVERY cam in obs_cam_keys); "
+                f"(3) episodes.jsonl is missing the action_config field. "
+                f"Rebuild with droid_helpers/build_droid_lerobot.py and confirm the .pth files exist."
+            )
         train_sampler = DistributedSampler(
             train_dataset,
             num_replicas=config.world_size,
