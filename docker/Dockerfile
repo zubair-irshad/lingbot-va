@@ -34,8 +34,10 @@ RUN pip install -r /tmp/requirements-docker.txt \
 # 3) flash-attn (needs torch present; no build isolation). CUDA 12.6 base matches
 #    the torch build, so the version check passes here (unlike the dev box).
 #    MAX_JOBS bounds the nvcc parallelism so the compile doesn't get OOM-killed;
-#    raise it on the DGX (lots of RAM) to speed the ~15-20min build up.
-ENV MAX_JOBS=4
+#    raise it on the DGX (lots of RAM) to speed the ~15-20min build up
+#    (docker build --build-arg MAX_JOBS=16 ...).
+ARG MAX_JOBS=4
+ENV MAX_JOBS=${MAX_JOBS}
 RUN pip install flash-attn==2.8.3.post1 --no-build-isolation
 
 # 4) Project code. Mount data/checkpoints at run time instead of baking them in.

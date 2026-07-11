@@ -4,21 +4,29 @@ Runs the single-scene (or multi-scene) DROID post-training with **forward-invers
 dynamics consistency** (`droid_train` config) inside a container, with wandb logging.
 On the DGX, GPUs are dedicated so FSDP CPU-offload is turned **off** for full speed.
 
+There are two ways to build/run: **plain `docker` scripts** (recommended — no
+docker-compose needed, works on the DGX) or **docker compose** (if you have the v2
+plugin). The scripts are the simplest path.
+
 ## 1. Build
 
 ```bash
-cd docker
-docker compose build           # ~cuda12.6 base + torch cu126 + flash-attn compile
+# from the repo root
+bash docker/build.sh                 # ~cuda12.6 base + torch cu126 + flash-attn compile
+MAX_JOBS=16 bash docker/build.sh     # faster flash-attn compile on a big-RAM DGX
 ```
+
+(compose alternative: `cd docker && docker compose build`)
 
 ## 2. Configure
 
 ```bash
-cp .env.example .env
-# edit .env: WANDB_API_KEY / WANDB_TEAM_NAME / WANDB_PROJECT, and the host paths:
+cp docker/.env.example docker/.env
+# edit docker/.env: WANDB_API_KEY / WANDB_TEAM_NAME / WANDB_PROJECT, and the host paths:
 #   DATASET_DIR  -> your data/droid_lerobot (built by build_droid_lerobot.py)
 #   CKPT_DIR     -> dir containing lingbot-va-base/
 #   OUTPUT_DIR   -> where checkpoints/logs are written
+# (defaults resolve to <repo>/data/droid_lerobot, <repo>/checkpoints, <repo>/outputs)
 ```
 
 ### 2a. Download the base checkpoint (~23 GB) on the DGX
@@ -51,21 +59,30 @@ You can run 2a/2b either on the host (then bind-mount) or inside the container
 ## 3. Train (8 GPUs, FSDP, no offload, wandb on)
 
 ```bash
-docker compose run --rm posttrain
-# equivalent to, inside the container:
-#   NGPU=8 CONFIG_NAME=droid_train bash script/run_droid_posttrain.sh \
-#       fsdp_cpu_offload=false enable_wandb=true
+bash docker/run.sh                          # default: 8-GPU FSDP, no offload, wandb on
 ```
 
 Override any config key as trailing `key=value` args, e.g. a longer run with a
 custom loss balance:
 
 ```bash
-docker compose run --rm posttrain \
-  bash script/run_droid_posttrain.sh fsdp_cpu_offload=false enable_wandb=true \
-       num_steps=5000 forward_dynamics_weight=1.0 inverse_dynamics_weight=1.0 \
-       batch_size=1 gradient_accumulation_steps=4
+bash docker/run.sh num_steps=5000 forward_dynamics_weight=1.0 \
+     inverse_dynamics_weight=1.0 batch_size=1 gradient_accumulation_steps=4
 ```
+
+Drop into an interactive shell in the container (to build the dataset, debug, etc.):
+
+```bash
+CMD=bash bash docker/run.sh
+```
+
+Pick specific GPUs / fewer GPUs:
+
+```bash
+GPUS='"device=0,1,2,3"' NGPU=4 bash docker/run.sh
+```
+
+(compose alternative: `cd docker && docker compose run --rm posttrain`)
 
 Checkpoints land in `${OUTPUT_DIR}/droid_train/checkpoints/checkpoint_step_*/transformer/`
 (diffusers format — load the same way as the base model).
