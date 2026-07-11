@@ -53,11 +53,35 @@ python droid_helpers/build_droid_lerobot.py \
   --fps 12 --height 256 --width 256
 ```
 
-Run 2a/2b inside the container via `CMD=bash bash docker/run.sh`. The raw DROID
-episodes are mounted read-only from the host `DROID_DIR` (default `<repo>/1.0.1`) to
-`/workspace/lingbot-va/1.0.1`, and the dataset you build is written to the mounted
-`DATASET_DIR`, so it persists on the host for the training run. (If `1.0.1/` isn't at
-the repo root on the host, set `DROID_DIR=/abs/path/to/1.0.1` before `docker/run.sh`.)
+Run 2a/2b inside the container via `CMD=bash bash docker/run.sh`. Key points on a
+shared DGX:
+
+- **Write datasets/outputs to your scratch space**, e.g. `/datasets/zubair`, via
+  `DATASET_DIR` / `OUTPUT_DIR`. `run.sh` mounts those at their **own absolute path**
+  inside the container, so the `--out` you pass resolves verbatim, and also sets
+  `LINGBOT_DATASET` so the trainer reads from there automatically.
+- The builder **never deletes** anything — if the target `lerobot/` subdir exists it
+  errors; pass a fresh `--out` or remove it yourself.
+- The raw DROID episodes are mounted read-only from `DROID_DIR` (default `<repo>/1.0.1`).
+- `run.sh` **mounts the live repo code** over the image copy (default `MOUNT_CODE=1`),
+  so a host `git pull` takes effect with no rebuild. Set `MOUNT_CODE=0` to use the
+  code baked into the image.
+
+Example on the DGX:
+
+```bash
+export DATASET_DIR=/datasets/zubair/droid_lerobot
+export OUTPUT_DIR=/datasets/zubair/outputs
+CMD=bash bash docker/run.sh          # shell in container (code + scratch mounted)
+# inside:
+python droid_helpers/build_droid_lerobot.py \
+  --scene "1.0.1/AUTOLab/success/2023-07-14/Fri_Jul_14_16:20:36_2023" \
+  --out /datasets/zubair/droid_lerobot --model checkpoints/lingbot-va-base \
+  --fps 12 --height 256 --width 256
+exit
+# then train (same DATASET_DIR/OUTPUT_DIR env):
+bash docker/run.sh
+```
 
 ## 3. Train (8 GPUs, FSDP, no offload, wandb on)
 

@@ -137,9 +137,14 @@ def build_lerobot(out_dir: str, scene_dir: str, meta: dict, ori_fps: int,
     """
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
-    # LeRobotDataset.create requires the root to NOT exist yet.
+    # LeRobotDataset.create requires the root to NOT exist yet. NEVER delete on a
+    # shared box — if it already exists, error out and let the user choose a fresh
+    # --out (or remove it themselves).
     if os.path.exists(out_dir):
-        shutil.rmtree(out_dir)
+        raise FileExistsError(
+            f"{out_dir} already exists. Refusing to delete it (shared filesystem). "
+            f"Pass a fresh --out (e.g. --out /datasets/zubair/droid_lerobot_v2) or "
+            f"remove {out_dir} manually.")
 
     task = meta.get("current_task", "manipulation task")
 

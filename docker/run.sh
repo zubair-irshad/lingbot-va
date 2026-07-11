@@ -23,18 +23,31 @@ IMAGE="${IMAGE:-lingbot-va-droid:latest}"
 NGPU="${NGPU:-8}"
 CONFIG_NAME="${CONFIG_NAME:-droid_train}"
 GPUS="${GPUS:-all}"
-DATASET_DIR="$(cd "${DATASET_DIR:-${REPO_ROOT}/data/droid_lerobot}" 2>/dev/null && pwd || echo "${REPO_ROOT}/data/droid_lerobot")"
-CKPT_DIR="$(cd "${CKPT_DIR:-${REPO_ROOT}/checkpoints}" 2>/dev/null && pwd || echo "${REPO_ROOT}/checkpoints")"
+# Writable locations. On a shared DGX, point these at your scratch space, e.g.
+#   DATASET_DIR=/datasets/zubair/droid_lerobot  OUTPUT_DIR=/datasets/zubair/outputs
+# They are mounted at their OWN absolute path inside the container so the paths you
+# pass to build_droid_lerobot.py (--out) and the trainer resolve verbatim.
+DATASET_DIR="${DATASET_DIR:-${REPO_ROOT}/data/droid_lerobot}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/outputs}"
-# Raw DROID 1.0.1 episodes (only needed to BUILD the dataset). Mounted read-only if present.
-DROID_DIR="${DROID_DIR:-${REPO_ROOT}/1.0.1}"
-mkdir -p "${OUTPUT_DIR}" "${DATASET_DIR}"
+CKPT_DIR="${CKPT_DIR:-${REPO_ROOT}/checkpoints}"
+DROID_DIR="${DROID_DIR:-${REPO_ROOT}/1.0.1}"       # raw DROID episodes (read-only)
+# Mount the live repo code over the image copy so host `git pull` takes effect with
+# no rebuild. Set MOUNT_CODE=0 to use the code baked into the image instead.
+MOUNT_CODE="${MOUNT_CODE:-1}"
 
-DROID_MOUNT=()
-if [ -d "${DROID_DIR}" ]; then
-    DROID_DIR="$(cd "${DROID_DIR}" && pwd)"
-    DROID_MOUNT=(-v "${DROID_DIR}:/workspace/lingbot-va/1.0.1:ro")
-fi
+mkdir -p "${OUTPUT_DIR}" "${DATASET_DIR}" 2>/dev/null || true
+
+# Bind DATASET_DIR / OUTPUT_DIR / CKPT_DIR at their own absolute paths (so e.g.
+# --out /datasets/zubair/droid_lerobot works verbatim), plus the default in-repo
+# location for backwards compatibility.
+MOUNTS=(
+    -v "${CKPT_DIR}:/workspace/lingbot-va/checkpoints"
+    -v "$(cd "${DATASET_DIR}" && pwd):$(cd "${DATASET_DIR}" && pwd)"
+    -v "$(cd "${OUTPUT_DIR}" && pwd):$(cd "${OUTPUT_DIR}" && pwd)"
+    -v "$(cd "${DATASET_DIR}" && pwd):/workspace/lingbot-va/data/droid_lerobot"
+)
+[ -d "${DROID_DIR}" ] && MOUNTS+=(-v "$(cd "${DROID_DIR}" && pwd):/workspace/lingbot-va/1.0.1:ro")
+[ "${MOUNT_CODE}" = "1" ] && MOUNTS+=(-v "${REPO_ROOT}:/workspace/lingbot-va")
 
 # Default command: full-speed 8-GPU training (no CPU offload) with wandb.
 DEFAULT_CMD="bash script/run_droid_posttrain.sh fsdp_cpu_offload=false enable_wandb=true $*"
@@ -51,11 +64,9 @@ exec docker run --rm -it \
     -e WANDB_TEAM_NAME="${WANDB_TEAM_NAME:-}" \
     -e WANDB_PROJECT="${WANDB_PROJECT:-lingbot-va-droid}" \
     -e WANDB_RUN_NAME="${WANDB_RUN_NAME:-}" \
+    -e LINGBOT_DATASET="$(cd "${DATASET_DIR}" && pwd)" \
     -e TOKENIZERS_PARALLELISM=false \
     -e PYTORCH_ALLOC_CONF=expandable_segments:True \
-    -v "${DATASET_DIR}:/workspace/lingbot-va/data/droid_lerobot" \
-    -v "${CKPT_DIR}:/workspace/lingbot-va/checkpoints" \
-    -v "${OUTPUT_DIR}:/workspace/lingbot-va/outputs" \
-    "${DROID_MOUNT[@]}" \
+    "${MOUNTS[@]}" \
     "${IMAGE}" \
     ${CMD}
