@@ -312,13 +312,20 @@ def main():
     print(f"[build] scene={scene_dir}\n[build] task={meta.get('current_task')!r} T={T} "
           f"stride={stride} -> {len(frame_ids)} latent frames (fps~{args.fps})")
 
-    ds, task, cam_videos = build_lerobot(out_dir, scene_dir, meta, ori_fps,
+    # Build the LeRobot dataset into a `lerobot/` SUBDIR of --out. `--out` itself may
+    # be a bind-mount point (can't be rmtree'd, and LeRobotDataset.create requires its
+    # root not to exist), so we never delete `--out`. The training loader scans
+    # dataset_path recursively for meta/info.json, so the subdir is found automatically.
+    os.makedirs(out_dir, exist_ok=True)
+    lerobot_root = os.path.join(out_dir, "lerobot")
+
+    ds, task, cam_videos = build_lerobot(lerobot_root, scene_dir, meta, ori_fps,
                                          args.height, args.width, frame_ids,
                                          raw_action, state, T)
-    length = inject_action_config(out_dir, T, task)
-    print(f"[build] LeRobot dataset written to {out_dir} (episode length={length})")
+    length = inject_action_config(lerobot_root, T, task)
+    print(f"[build] LeRobot dataset written to {lerobot_root} (episode length={length})")
 
-    extract_latents(out_dir, args.model, cam_videos, task, frame_ids, ori_fps,
+    extract_latents(lerobot_root, args.model, cam_videos, task, frame_ids, ori_fps,
                     args.fps, args.height, args.width, start_frame, end_frame, args.device)
 
     if args.write_empty_emb:
