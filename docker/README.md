@@ -77,15 +77,18 @@ Notes:
 ## Step 5 — inside the container: launch training (8 GPUs, watch it live)
 
 ```bash
+DATASET=/datasets/zubair/droid_lerobot \
 NGPU=8 bash script/run_droid_posttrain.sh fsdp_cpu_offload=false enable_wandb=true
 ```
 
+- **`DATASET=...`** points training at your built dataset. Pass it explicitly (the script
+  forwards it as a `--dataset_path` override) — this is the reliable way; do NOT rely on the
+  in-repo default, which is a different directory. You can also pass `dataset_path=...` as a
+  trailing arg. The trainer logs the resolved `dataset_path` / `empty_emb_path` at startup.
 - `fsdp_cpu_offload=false` → full-speed GPU-resident training (the dev-box A6000 path used
   `true`; the DGX has the memory to keep everything on-GPU).
 - `enable_wandb=true` → logs to the project/team from your env (`WANDB_PROJECT`,
   `WANDB_TEAM_NAME`); set `WANDB_RUN_NAME` to name the run.
-- The trainer reads the dataset from `LINGBOT_DATASET` (set automatically to `DATASET_DIR`
-  by `shell.sh`/`run.sh`), so it finds `/datasets/zubair/droid_lerobot` with no extra flags.
 
 Override any config key as trailing `key=value` args, e.g. a longer run:
 

@@ -630,9 +630,16 @@ def run(args):
         if rank == 0:
             logger.info(f"Override config.{key} = {val!r}")
 
+    # If dataset_path was overridden (CLI or the config's LINGBOT_DATASET default),
+    # keep empty_emb_path consistent unless it was explicitly overridden too.
+    if 'dataset_path' in config and 'empty_emb_path' not in getattr(args, 'overrides', {}):
+        config['empty_emb_path'] = os.path.join(config['dataset_path'], 'empty_emb.pt')
+
     if rank == 0:
         logger.info(f"Using config: {args.config_name}")
         logger.info(f"World size: {world_size}, Local rank: {local_rank}")
+        logger.info(f"dataset_path = {config.get('dataset_path')}")
+        logger.info(f"empty_emb_path = {config.get('empty_emb_path')}")
 
     trainer = Trainer(config)
     trainer.train()

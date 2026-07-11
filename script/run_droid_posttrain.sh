@@ -1,13 +1,14 @@
 #!/usr/bin/bash
-# DROID single-scene action-conditioned post-training (overfit).
+# DROID post-training with forward-inverse dynamics consistency.
 #
 # Uses the existing FSDP trainer (wan_va/train.py) with CONFIG_NAME=droid_train,
-# which sets action_condition=True (video-from-actions + action-consistency loss).
+# which sets dynamics_consistency=True (forward video-from-action + inverse
+# action-from-video, shared params).
 #
 # Usage:
-#   NGPU=1 bash script/run_droid_posttrain.sh                 # single freest A6000
-#   NGPU=3 bash script/run_droid_posttrain.sh                 # all 3 A6000
+#   NGPU=1 bash script/run_droid_posttrain.sh                 # single freest GPU
 #   NGPU=8 bash script/run_droid_posttrain.sh                 # on the A100 DGX
+#   DATASET=/datasets/zubair/droid_lerobot NGPU=8 bash script/run_droid_posttrain.sh
 # Any extra key=value pairs become --key value config overrides forwarded to train.py.
 set -x
 umask 007
@@ -33,11 +34,22 @@ fi
 echo "NGPU=${NGPU} CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<all>}"
 
 overrides=()
+have_dataset_override=0
 for kv in "$@"; do
     key="${kv%%=*}"
     val="${kv#*=}"
+    [ "${key}" = "dataset_path" ] && have_dataset_override=1
     overrides+=("--${key}" "${val}")
 done
+
+# Pass the dataset dir EXPLICITLY as a config override (don't rely on env
+# propagating through torchrun subprocesses). Precedence: caller's dataset_path=
+# arg > $DATASET > $LINGBOT_DATASET.
+DATASET="${DATASET:-${LINGBOT_DATASET:-}}"
+if [ "${have_dataset_override}" = "0" ] && [ -n "${DATASET}" ]; then
+    overrides+=(--dataset_path "${DATASET}")
+    echo "Using dataset_path=${DATASET}"
+fi
 
 export TOKENIZERS_PARALLELISM=false
 PYTORCH_ALLOC_CONF="expandable_segments:True" \
