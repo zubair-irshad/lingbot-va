@@ -35,18 +35,27 @@ DROID_DIR="${DROID_DIR:-${REPO_ROOT}/1.0.1}"       # raw DROID episodes (read-on
 # no rebuild. Set MOUNT_CODE=0 to use the code baked into the image instead.
 MOUNT_CODE="${MOUNT_CODE:-1}"
 
-mkdir -p "${OUTPUT_DIR}" "${DATASET_DIR}" 2>/dev/null || true
+# Create the writable dirs (fail loudly if we truly can't — e.g. no perms).
+for d in "${DATASET_DIR}" "${OUTPUT_DIR}"; do
+    mkdir -p "${d}" || { echo "ERROR: cannot create ${d} (check permissions)"; exit 1; }
+done
+# Resolve to absolute paths WITHOUT requiring cd (realpath -m handles non-existing too).
+abspath() { realpath -m "$1" 2>/dev/null || python3 -c "import os,sys;print(os.path.abspath(sys.argv[1]))" "$1"; }
+DATASET_DIR="$(abspath "${DATASET_DIR}")"
+OUTPUT_DIR="$(abspath "${OUTPUT_DIR}")"
+CKPT_DIR="$(abspath "${CKPT_DIR}")"
+DROID_DIR="$(abspath "${DROID_DIR}")"
 
 # Bind DATASET_DIR / OUTPUT_DIR / CKPT_DIR at their own absolute paths (so e.g.
 # --out /datasets/zubair/droid_lerobot works verbatim), plus the default in-repo
 # location for backwards compatibility.
 MOUNTS=(
     -v "${CKPT_DIR}:/workspace/lingbot-va/checkpoints"
-    -v "$(cd "${DATASET_DIR}" && pwd):$(cd "${DATASET_DIR}" && pwd)"
-    -v "$(cd "${OUTPUT_DIR}" && pwd):$(cd "${OUTPUT_DIR}" && pwd)"
-    -v "$(cd "${DATASET_DIR}" && pwd):/workspace/lingbot-va/data/droid_lerobot"
+    -v "${DATASET_DIR}:${DATASET_DIR}"
+    -v "${OUTPUT_DIR}:${OUTPUT_DIR}"
+    -v "${DATASET_DIR}:/workspace/lingbot-va/data/droid_lerobot"
 )
-[ -d "${DROID_DIR}" ] && MOUNTS+=(-v "$(cd "${DROID_DIR}" && pwd):/workspace/lingbot-va/1.0.1:ro")
+[ -d "${DROID_DIR}" ] && MOUNTS+=(-v "${DROID_DIR}:/workspace/lingbot-va/1.0.1:ro")
 [ "${MOUNT_CODE}" = "1" ] && MOUNTS+=(-v "${REPO_ROOT}:/workspace/lingbot-va")
 
 # Default command: full-speed 8-GPU training (no CPU offload) with wandb.
@@ -64,7 +73,7 @@ exec docker run --rm -it \
     -e WANDB_TEAM_NAME="${WANDB_TEAM_NAME:-}" \
     -e WANDB_PROJECT="${WANDB_PROJECT:-lingbot-va-droid}" \
     -e WANDB_RUN_NAME="${WANDB_RUN_NAME:-}" \
-    -e LINGBOT_DATASET="$(cd "${DATASET_DIR}" && pwd)" \
+    -e LINGBOT_DATASET="${DATASET_DIR}" \
     -e TOKENIZERS_PARALLELISM=false \
     -e PYTORCH_ALLOC_CONF=expandable_segments:True \
     "${MOUNTS[@]}" \
