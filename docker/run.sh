@@ -79,6 +79,20 @@ CMD="${CMD:-${DEFAULT_CMD}}"
 USER_ARGS=()
 if [ "${RUN_AS_ROOT:-0}" != "1" ]; then
     USER_ARGS=(--user "$(id -u):$(id -g)" -e HOME=/tmp -e XDG_CACHE_HOME=/tmp/.cache)
+    # A --user UID that has no entry in the image's /etc/passwd breaks Python's
+    # getpass.getuser() (used by torch.compile to name its cache) -> KeyError, and
+    # prints "I have no name!". Give the UID a name via a synthesized passwd/group
+    # file mounted read-only, and pin the inductor cache to a writable dir.
+    PASSWD_TMP="$(mktemp)"; GROUP_TMP="$(mktemp)"
+    printf 'user:x:%s:%s:user:/tmp:/bin/bash\n' "$(id -u)" "$(id -g)" > "${PASSWD_TMP}"
+    printf 'user:x:%s:\n' "$(id -g)" > "${GROUP_TMP}"
+    USER_ARGS+=(
+        -v "${PASSWD_TMP}:/etc/passwd:ro"
+        -v "${GROUP_TMP}:/etc/group:ro"
+        -e TORCHINDUCTOR_CACHE_DIR=/tmp/.torchinductor
+        -e TRITON_CACHE_DIR=/tmp/.triton
+        -e USER=user -e LOGNAME=user
+    )
 fi
 
 exec docker run --rm -it \
