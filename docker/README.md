@@ -53,8 +53,11 @@ python droid_helpers/build_droid_lerobot.py \
   --fps 12 --height 256 --width 256
 ```
 
-You can run 2a/2b either on the host (then bind-mount) or inside the container
-(`docker compose run --rm posttrain bash`, then run the commands there).
+Run 2a/2b inside the container via `CMD=bash bash docker/run.sh`. The raw DROID
+episodes are mounted read-only from the host `DROID_DIR` (default `<repo>/1.0.1`) to
+`/workspace/lingbot-va/1.0.1`, and the dataset you build is written to the mounted
+`DATASET_DIR`, so it persists on the host for the training run. (If `1.0.1/` isn't at
+the repo root on the host, set `DROID_DIR=/abs/path/to/1.0.1` before `docker/run.sh`.)
 
 ## 3. Train (8 GPUs, FSDP, no offload, wandb on)
 

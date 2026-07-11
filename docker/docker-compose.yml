@@ -31,6 +31,8 @@ services:
       - ${DATASET_DIR:-../data/droid_lerobot}:/workspace/lingbot-va/data/droid_lerobot
       - ${CKPT_DIR:-../checkpoints}:/workspace/lingbot-va/checkpoints
       - ${OUTPUT_DIR:-../outputs}:/workspace/lingbot-va/outputs
+      # Raw DROID 1.0.1 episodes (only needed to BUILD the dataset), read-only.
+      - ${DROID_DIR:-../1.0.1}:/workspace/lingbot-va/1.0.1:ro
     deploy:
       resources:
         reservations:

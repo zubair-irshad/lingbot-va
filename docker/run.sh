@@ -26,7 +26,15 @@ GPUS="${GPUS:-all}"
 DATASET_DIR="$(cd "${DATASET_DIR:-${REPO_ROOT}/data/droid_lerobot}" 2>/dev/null && pwd || echo "${REPO_ROOT}/data/droid_lerobot")"
 CKPT_DIR="$(cd "${CKPT_DIR:-${REPO_ROOT}/checkpoints}" 2>/dev/null && pwd || echo "${REPO_ROOT}/checkpoints")"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/outputs}"
-mkdir -p "${OUTPUT_DIR}"
+# Raw DROID 1.0.1 episodes (only needed to BUILD the dataset). Mounted read-only if present.
+DROID_DIR="${DROID_DIR:-${REPO_ROOT}/1.0.1}"
+mkdir -p "${OUTPUT_DIR}" "${DATASET_DIR}"
+
+DROID_MOUNT=()
+if [ -d "${DROID_DIR}" ]; then
+    DROID_DIR="$(cd "${DROID_DIR}" && pwd)"
+    DROID_MOUNT=(-v "${DROID_DIR}:/workspace/lingbot-va/1.0.1:ro")
+fi
 
 # Default command: full-speed 8-GPU training (no CPU offload) with wandb.
 DEFAULT_CMD="bash script/run_droid_posttrain.sh fsdp_cpu_offload=false enable_wandb=true $*"
@@ -48,5 +56,6 @@ exec docker run --rm -it \
     -v "${DATASET_DIR}:/workspace/lingbot-va/data/droid_lerobot" \
     -v "${CKPT_DIR}:/workspace/lingbot-va/checkpoints" \
     -v "${OUTPUT_DIR}:/workspace/lingbot-va/outputs" \
+    "${DROID_MOUNT[@]}" \
     "${IMAGE}" \
     ${CMD}
