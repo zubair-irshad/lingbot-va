@@ -134,8 +134,12 @@ def main():
 
     meta = load_metadata(args.scene)
     task = meta.get("current_task", "")
-    ext1, wrist = str(meta["ext1_cam_serial"]), str(meta["wrist_cam_serial"])
-    serial_for_key = {CAM_KEYS[0]: ext1, CAM_KEYS[1]: wrist, CAM_KEYS[2]: wrist}
+    ext1 = str(meta["ext1_cam_serial"])
+    ext2 = str(meta["ext2_cam_serial"])
+    wrist = str(meta["wrist_cam_serial"])
+    # MUST match the camera layout used to build the training dataset
+    # (build_droid_lerobot.py): ext1->cam_high, wrist->cam_left_wrist, ext2->cam_right_wrist.
+    serial_for_key = {CAM_KEYS[0]: ext1, CAM_KEYS[1]: wrist, CAM_KEYS[2]: ext2}
 
     gt_action, T = load_gt_actions(args.scene, cfg.action_per_frame)
     stride = max(1, round(60 / args.fps))
