@@ -1,0 +1,46 @@
+# 8xA100 DGX post-training for LingBot-VA on DROID (dynamics-consistency mode).
+#
+#   cd docker && docker compose build
+#   # edit the .env file (see docker/.env.example) with your wandb creds + paths
+#   docker compose run --rm posttrain
+#
+# Data + checkpoints + outputs are bind-mounted so nothing large is baked into the image.
+services:
+  posttrain:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: lingbot-va-droid:latest
+    shm_size: "64gb"            # dataloader workers + FSDP collectives
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    environment:
+      # --- wandb ---
+      WANDB_API_KEY: ${WANDB_API_KEY:-}
+      WANDB_BASE_URL: ${WANDB_BASE_URL:-https://api.wandb.ai}
+      WANDB_TEAM_NAME: ${WANDB_TEAM_NAME:-}
+      WANDB_PROJECT: ${WANDB_PROJECT:-lingbot-va-droid}
+      # --- run config ---
+      NGPU: ${NGPU:-8}
+      CONFIG_NAME: ${CONFIG_NAME:-droid_train}
+      TOKENIZERS_PARALLELISM: "false"
+      PYTORCH_ALLOC_CONF: "expandable_segments:True"
+    volumes:
+      - ${DATASET_DIR:-../data/droid_lerobot}:/workspace/lingbot-va/data/droid_lerobot
+      - ${CKPT_DIR:-../checkpoints}:/workspace/lingbot-va/checkpoints
+      - ${OUTPUT_DIR:-../outputs}:/workspace/lingbot-va/outputs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # On the DGX, GPUs are dedicated -> turn OFF cpu offload for full-speed training,
+    # and enable wandb. Override num_steps/etc. as trailing key=value args.
+    command: >
+      bash script/run_droid_posttrain.sh
+      fsdp_cpu_offload=false
+      enable_wandb=true

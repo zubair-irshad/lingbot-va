@@ -10,6 +10,11 @@ from .va_demo_i2va import va_demo_i2va_cfg
 from .va_libero_cfg import va_libero_cfg
 from .va_libero_train_cfg import va_libero_train_cfg
 from .va_libero_i2va import va_libero_i2va_cfg
+from .va_droid_cfg import va_droid_cfg
+from .va_droid_i2va import va_droid_i2va_cfg
+from .va_droid_train_cfg import va_droid_train_cfg
+from .va_droid_2cam_cfg import va_droid_2cam_cfg
+from .va_droid_2cam_i2va import va_droid_2cam_i2va_cfg
 
 VA_CONFIGS = {
     'robotwin': va_robotwin_cfg,
@@ -23,4 +28,9 @@ VA_CONFIGS = {
     'libero': va_libero_cfg,
     'libero_train': va_libero_train_cfg,
     'libero_i2av': va_libero_i2va_cfg,
+    'droid': va_droid_cfg,
+    'droid_i2av': va_droid_i2va_cfg,
+    'droid_train': va_droid_train_cfg,
+    'droid_2cam': va_droid_2cam_cfg,
+    'droid_2cam_i2av': va_droid_2cam_i2va_cfg,
 }

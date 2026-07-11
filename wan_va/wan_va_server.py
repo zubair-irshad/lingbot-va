@@ -670,8 +670,21 @@ class VA_Server:
         # Move VAE to GPU for decoding
         if self.enable_offload:
             self.vae = self.vae.to(self.device).to(self.dtype)
-        
-        decoded_video = self.decode_one_video(pred_latent, 'np')[0]
+
+        # Decode in temporal groups so long-horizon rollouts (many chunks) don't OOM
+        # the VAE's conv3d. Group size is a small multiple of frame_chunk_size.
+        group_chunks = getattr(self.job_config, 'decode_group_chunks', 5)
+        group_frames = max(1, group_chunks) * self.job_config.frame_chunk_size
+        total_frames = pred_latent.shape[2]
+        if total_frames <= group_frames:
+            decoded_video = self.decode_one_video(pred_latent, 'np')[0]
+        else:
+            frames = []
+            for st in range(0, total_frames, group_frames):
+                seg = pred_latent[:, :, st:st + group_frames]
+                frames.extend(list(self.decode_one_video(seg, 'np')[0]))
+                torch.cuda.empty_cache()
+            decoded_video = frames
         export_to_video(decoded_video, os.path.join(self.save_root, "demo.mp4"), fps=10)
 
 def run(args):    
@@ -680,6 +693,13 @@ def run(args):
     port = config.port if args.port is None else args.port
     if args.save_root is not None:
         config.save_root = args.save_root
+    # Optional i2av overrides so a scene can be selected without editing the config.
+    if getattr(args, 'input_img_path', None) is not None:
+        config.input_img_path = args.input_img_path
+    if getattr(args, 'prompt', None) is not None:
+        config.prompt = args.prompt
+    if getattr(args, 'num_chunks_to_infer', None) is not None:
+        config.num_chunks_to_infer = args.num_chunks_to_infer
     rank = int(os.getenv("RANK", 0))
     local_rank = int(os.environ.get('LOCAL_RANK', 0))
     world_size = int(os.environ.get("WORLD_SIZE", 1))
@@ -720,6 +740,24 @@ def main():
         type=str,
         default=None,
         help='save root'
+    )
+    parser.add_argument(
+        "--input_img_path",
+        type=str,
+        default=None,
+        help='(i2av) dir with the {cam_key}.png init frames'
+    )
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        default=None,
+        help='(i2av) task/language prompt'
+    )
+    parser.add_argument(
+        "--num_chunks_to_infer",
+        type=int,
+        default=None,
+        help='(i2av) number of autoregressive chunks to roll out'
     )
     args = parser.parse_args()
     run(args)

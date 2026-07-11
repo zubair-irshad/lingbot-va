@@ -50,16 +50,18 @@ import gc
 class Trainer:
     def __init__(self, config):
         if config.enable_wandb and config.rank == 0:
-            wandb.login(host=os.environ['WANDB_BASE_URL'], key=os.environ['WANDB_API_KEY'])
+            base_url = os.environ.get('WANDB_BASE_URL')
+            api_key = os.environ.get('WANDB_API_KEY')
+            if api_key:
+                wandb.login(host=base_url, key=api_key)
             self.wandb = wandb
             self.wandb.init(
-                entity=os.environ["WANDB_TEAM_NAME"],
-                project=os.getenv("WANDB_PROJECT", "va_robotwin"),
+                entity=os.environ.get("WANDB_TEAM_NAME") or None,
+                project=os.getenv("WANDB_PROJECT", "lingbot-va-droid"),
                 # dir=log_dir,
                 config=config,
                 mode="online",
-                name='test_lln'
-                # name=os.path.basename(os.path.normpath(job_config.job.dump_folder))
+                name=os.getenv("WANDB_RUN_NAME", getattr(config, '__name__', 'run')),
             )
             logger.info("WandB logging enabled")
         self.step = 0
@@ -92,7 +94,13 @@ class Trainer:
         apply_ac(self.transformer)
 
         logger.info("Setting up FSDP...")
-        shard_fn = shard_model
+        # Optionally offload params/grads/optimizer state to CPU (fits 14B on limited VRAM).
+        if getattr(config, 'fsdp_cpu_offload', False):
+            from functools import partial
+            shard_fn = partial(shard_model, cpu_offload=True)
+            logger.info("FSDP CPU offload enabled")
+        else:
+            shard_fn = shard_model
         self.transformer = _configure_model(
             model=self.transformer,
             shard_fn=shard_fn,
@@ -103,16 +111,37 @@ class Trainer:
         self.transformer.train()
         self.transformer.requires_grad_(True)
 
-        # Optimizer
-        self.optimizer = torch.optim.AdamW(
-            [p for p in self.transformer.parameters() if p.requires_grad],
-            lr=config.learning_rate,
-            betas=(config.beta1, config.beta2),
-            eps=1e-8,
-            weight_decay=config.weight_decay,
-            fused=True,
-            foreach=False,
-        )
+        # Optimizer. Optionally use bitsandbytes 8-bit AdamW to roughly halve the
+        # optimizer-state memory (helps fit a 14B full fine-tune on smaller/shared
+        # GPUs); falls back to fused torch AdamW when the flag is off/unavailable.
+        trainable_params = [p for p in self.transformer.parameters() if p.requires_grad]
+        if getattr(config, 'use_8bit_optimizer', False):
+            try:
+                from bitsandbytes.optim import AdamW8bit
+                self.optimizer = AdamW8bit(
+                    trainable_params,
+                    lr=config.learning_rate,
+                    betas=(config.beta1, config.beta2),
+                    eps=1e-8,
+                    weight_decay=config.weight_decay,
+                )
+                logger.info("Using bitsandbytes AdamW8bit optimizer")
+            except Exception as e:
+                logger.warning(f"8-bit optimizer unavailable ({e}); using fused AdamW")
+                self.optimizer = torch.optim.AdamW(
+                    trainable_params, lr=config.learning_rate,
+                    betas=(config.beta1, config.beta2), eps=1e-8,
+                    weight_decay=config.weight_decay, fused=True, foreach=False)
+        else:
+            self.optimizer = torch.optim.AdamW(
+                trainable_params,
+                lr=config.learning_rate,
+                betas=(config.beta1, config.beta2),
+                eps=1e-8,
+                weight_decay=config.weight_decay,
+                fused=True,
+                foreach=False,
+            )
 
         self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, 
             lr_lambda=lambda step: warmup_constant_lambda(step, warmup_steps=config.warmup_steps))
@@ -165,10 +194,23 @@ class Trainer:
         return batch
 
     @torch.no_grad()
-    def _add_noise(self, latent, train_scheduler, action_mask=False, action_mode=False, noisy_cond_prob=0.):
+    def _add_noise(self, latent, train_scheduler, action_mask=False, action_mode=False, noisy_cond_prob=0., clean_condition=False):
         B, C, F, H, W = latent.shape
 
-        timestep_ids = sample_timestep_id(batch_size=F, num_train_timesteps=train_scheduler.num_train_timesteps)
+        if clean_condition:
+            # Action-conditioned mode: feed the (action) stream near-clean by pinning
+            # every frame's timestep to a small SNR floor instead of sampling it, so
+            # the model predicts video FROM ground-truth actions rather than denoising
+            # them. `action_cond_snr_floor` (in [0,1]) is a small target sigma; the
+            # scheduler's `timesteps` array is DESCENDING (index 0 = max noise), so we
+            # pick the index whose sigma is closest to the floor (near the clean end),
+            # NOT snr_floor * N which would land at the noisy end.
+            snr_floor = getattr(self.config, 'action_cond_snr_floor', 0.02)
+            target_ts = float(min(max(snr_floor, 0.0), 1.0)) * train_scheduler.num_train_timesteps
+            floor_id = int(torch.argmin((train_scheduler.timesteps - target_ts).abs()).item())
+            timestep_ids = torch.full((F,), floor_id, dtype=torch.int64)
+        else:
+            timestep_ids = sample_timestep_id(batch_size=F, num_train_timesteps=train_scheduler.num_train_timesteps)
         noise = torch.zeros_like(latent).normal_()
         timesteps = train_scheduler.timesteps[timestep_ids].to(device=self.device)
         noisy_latents =train_scheduler.add_noise(latent, noise, timesteps, t_dim=2)
@@ -228,12 +270,22 @@ class Trainer:
             action_mode=False,
             noisy_cond_prob=0.5)
         
+        # Forward-inverse dynamics consistency (SC2): when `dynamics_consistency` is
+        # on we keep BOTH streams noised so the single shared-parameter pass trains
+        # the forward mode (noisy video attends to the clean-action condition) AND
+        # the inverse mode (noisy action attends to the clean-video condition)
+        # simultaneously. This parameter sharing is the implicit anti-drift
+        # regularizer. `action_condition` (forward-only: action pinned near-clean)
+        # is the legacy path and is disabled when dynamics_consistency is set.
+        dynamics_consistency = getattr(self.config, 'dynamics_consistency', False)
+        action_condition = getattr(self.config, 'action_condition', False) and not dynamics_consistency
         action_dict = self._add_noise(
-            latent=batch_dict['actions'], 
-            train_scheduler=self.train_scheduler_action, 
-            action_mask=batch_dict['actions_mask'], 
+            latent=batch_dict['actions'],
+            train_scheduler=self.train_scheduler_action,
+            action_mask=batch_dict['actions_mask'],
             action_mode=True,
-            noisy_cond_prob=0.0)
+            noisy_cond_prob=0.0,
+            clean_condition=action_condition)
 
         latent_dict['text_emb'] = batch_dict['text_emb']
         action_dict['text_emb'] = batch_dict['text_emb']
@@ -291,6 +343,21 @@ class Trainer:
         action_loss_per_frame = action_loss.sum(dim=1)  # (B*F,)
         action_mask_per_frame = action_mask.sum(dim=1)  # (B*F,)
         action_loss = (action_loss_per_frame / (action_mask_per_frame + 1e-6)).mean()
+
+        if getattr(self.config, 'dynamics_consistency', False):
+            # SC2 forward-inverse dynamics consistency. latent_loss is the FORWARD
+            # dynamics term (render video from the action stream); action_loss is the
+            # INVERSE dynamics term (recover actions from the video stream). Both share
+            # transformer parameters, so optimizing them jointly makes the forward mode
+            # render frames from which the inverse mode can recover the commanded
+            # actions — an implicit anti-drift regularizer. Weights let you tilt the
+            # balance (default: equal).
+            latent_loss = latent_loss * getattr(self.config, 'forward_dynamics_weight', 1.0)
+            action_loss = action_loss * getattr(self.config, 'inverse_dynamics_weight', 1.0)
+        elif getattr(self.config, 'action_condition', False):
+            # Legacy forward-only mode: action stream fed near-clean (SNR floor); this
+            # masked flow-matching term reconstructs the injected GT action.
+            action_loss = action_loss * getattr(self.config, 'action_consistency_weight', 1.0)
 
         return latent_loss / self.gradient_accumulation_steps, action_loss / self.gradient_accumulation_steps
 
@@ -520,6 +587,29 @@ def run(args):
     if args.save_root is not None:
         config.save_root = args.save_root
 
+    # Apply generic --key value overrides onto the config (coerce to the existing
+    # type when the key already exists; otherwise best-effort literal parse).
+    for key, raw in getattr(args, 'overrides', {}).items():
+        if key in config:
+            cur = config[key]
+            if isinstance(cur, bool):
+                val = str(raw).lower() in ('1', 'true', 'yes', 'y')
+            elif isinstance(cur, int):
+                val = int(raw)
+            elif isinstance(cur, float):
+                val = float(raw)
+            else:
+                val = raw
+        else:
+            try:
+                import ast
+                val = ast.literal_eval(raw)
+            except Exception:
+                val = raw
+        config[key] = val
+        if rank == 0:
+            logger.info(f"Override config.{key} = {val!r}")
+
     if rank == 0:
         logger.info(f"Using config: {args.config_name}")
         logger.info(f"World size: {world_size}, Local rank: {local_rank}")
@@ -544,7 +634,27 @@ def main():
         help="Root directory for saving checkpoints",
     )
 
-    args = parser.parse_args()
+    args, extra = parser.parse_known_args()
+    # Collect any additional --key value pairs as generic config overrides.
+    overrides = {}
+    i = 0
+    while i < len(extra):
+        tok = extra[i]
+        if tok.startswith('--'):
+            key = tok[2:]
+            if '=' in key:
+                k, v = key.split('=', 1)
+                overrides[k] = v
+                i += 1
+            elif i + 1 < len(extra) and not extra[i + 1].startswith('--'):
+                overrides[key] = extra[i + 1]
+                i += 2
+            else:
+                overrides[key] = 'true'
+                i += 1
+        else:
+            i += 1
+    args.overrides = overrides
     run(args)
 
 

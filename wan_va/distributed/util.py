@@ -24,7 +24,9 @@ def _configure_model(model, shard_fn, param_dtype, device, eval_mode=True):
 def init_distributed(world_size, local_rank, rank):
     # if world_size > 1:
     torch.cuda.set_device(local_rank)
-    dist.init_process_group(backend="nccl",
+    # Register both a CUDA (nccl) and a CPU (gloo) backend so FSDP CPU-offload,
+    # which reduces offloaded DTensors on the CPU device, has a usable backend.
+    dist.init_process_group(backend="cpu:gloo,cuda:nccl",
                             init_method="env://",
                             rank=rank,
                             world_size=world_size)

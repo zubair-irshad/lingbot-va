@@ -28,8 +28,14 @@ from functools import partial
 
 try:
     from flash_attn_interface import flash_attn_func
-except:
-    from flash_attn import flash_attn_func
+except ImportError:
+    try:
+        from flash_attn import flash_attn_func
+    except ImportError:
+        # flash-attn is optional: inference uses attn_mode="torch" and training uses
+        # attn_mode="flex", neither of which needs this kernel. Only the
+        # attn_mode="flashattn" path requires it, and it will fail loudly there.
+        flash_attn_func = None
 
 __all__ = ['WanTransformer3DModel']
 

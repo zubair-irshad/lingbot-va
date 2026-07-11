@@ -1,0 +1,16 @@
+# Keep the build context small — large artifacts are bind-mounted at run time.
+.venv/
+checkpoints/
+data/
+outputs/
+train_out/
+1.0.1/
+*.pt
+*.pth
+*.safetensors
+*.mp4
+*.svo
+.git/
+__pycache__/
+*.pyc
+LingBot_VA*_paper.pdf

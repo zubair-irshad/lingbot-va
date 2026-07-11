@@ -1,0 +1,35 @@
+# LingBot-VA DROID post-training — pinned deps (mirrors the verified .venv).
+# torch/torchvision/torchaudio are installed separately from the cu126 index in
+# the Dockerfile; flash-attn is compiled with --no-build-isolation after torch.
+diffusers==0.36.0
+transformers==4.55.2
+tokenizers==0.21.4
+accelerate==1.14.0
+einops==0.8.2
+easydict==1.13
+numpy==1.26.4
+safetensors==0.8.0
+opencv-python==4.11.0.86
+imageio[ffmpeg]==2.37.3
+matplotlib==3.10.9
+ftfy==6.3.1
+pillow==12.2.0
+scipy==1.15.3
+wandb==0.28.0
+msgpack==1.2.1
+websockets==16.1
+h5py==3.16.0
+tqdm
+
+# LeRobot dataset-loader runtime deps (lerobot itself is installed --no-deps in the
+# Dockerfile). datasets is pinned to 3.6.0 to satisfy lerobot 0.3.3's declared
+# constraint (datasets<=3.6.0); the loader only uses `with_format`, stable across 3.x.
+datasets==3.6.0
+jsonlines==4.0.0
+pyarrow==25.0.0
+pandas==2.3.3
+av==17.1.0
+deepdiff==9.1.0
+
+# HF hub CLI for pulling the base checkpoint inside the container (optional).
+huggingface_hub[cli]
