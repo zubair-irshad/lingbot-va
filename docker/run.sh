@@ -49,12 +49,23 @@ DROID_DIR="$(abspath "${DROID_DIR}")"
 # Bind DATASET_DIR / OUTPUT_DIR / CKPT_DIR at their own absolute paths (so e.g.
 # --out /datasets/zubair/droid_lerobot works verbatim), plus the default in-repo
 # location for backwards compatibility.
-MOUNTS=(
-    -v "${CKPT_DIR}:/workspace/lingbot-va/checkpoints"
-    -v "${DATASET_DIR}:${DATASET_DIR}"
-    -v "${OUTPUT_DIR}:${OUTPUT_DIR}"
-    -v "${DATASET_DIR}:/workspace/lingbot-va/data/droid_lerobot"
-)
+# Host scratch root (default /datasets), mounted at its own path if it exists — so
+# /datasets/zubair/... is always reachable in the container even when DATASET_DIR /
+# OUTPUT_DIR weren't exported. Set SCRATCH_DIR="" to disable.
+SCRATCH_DIR="${SCRATCH_DIR-/datasets}"
+[ -n "${SCRATCH_DIR}" ] && [ -d "${SCRATCH_DIR}" ] && SCRATCH_DIR="$(abspath "${SCRATCH_DIR}")" || SCRATCH_DIR=""
+
+# under_scratch <path> -> true if <path> is inside SCRATCH_DIR (already covered by its mount)
+under_scratch() { [ -n "${SCRATCH_DIR}" ] && case "$1/" in "${SCRATCH_DIR}/"*) return 0;; esac; return 1; }
+
+MOUNTS=(-v "${CKPT_DIR}:/workspace/lingbot-va/checkpoints")
+[ -n "${SCRATCH_DIR}" ] && MOUNTS+=(-v "${SCRATCH_DIR}:${SCRATCH_DIR}")
+# Self-mount DATASET_DIR/OUTPUT_DIR only if NOT already covered by the scratch mount
+# (avoids overlapping/nested binds).
+under_scratch "${DATASET_DIR}" || MOUNTS+=(-v "${DATASET_DIR}:${DATASET_DIR}")
+under_scratch "${OUTPUT_DIR}"  || MOUNTS+=(-v "${OUTPUT_DIR}:${OUTPUT_DIR}")
+# Back-compat: also expose the dataset at the in-repo default path.
+MOUNTS+=(-v "${DATASET_DIR}:/workspace/lingbot-va/data/droid_lerobot")
 [ -d "${DROID_DIR}" ] && MOUNTS+=(-v "${DROID_DIR}:/workspace/lingbot-va/1.0.1:ro")
 [ "${MOUNT_CODE}" = "1" ] && MOUNTS+=(-v "${REPO_ROOT}:/workspace/lingbot-va")
 

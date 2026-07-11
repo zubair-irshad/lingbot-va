@@ -128,6 +128,7 @@ copy `docker/.env.example`):
 | `OUTPUT_DIR` | `<repo>/outputs` | checkpoints + logs |
 | `CKPT_DIR` | `<repo>/checkpoints` | dir containing `lingbot-va-base/` |
 | `DROID_DIR` | `<repo>/1.0.1` | raw DROID episodes (mounted read-only) |
+| `SCRATCH_DIR` | `/datasets` | host scratch root, auto-mounted if it exists (so `/datasets/zubair/...` is always reachable); set `""` to disable |
 | `NGPU` | `8` | GPUs for FSDP |
 | `GPUS` | `all` | which GPUs (`'"device=0,1"'` for a subset) |
 | `MOUNT_CODE` | `1` | mount live repo code (host `git pull` applies, no rebuild) |
